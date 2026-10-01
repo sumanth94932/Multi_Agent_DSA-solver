@@ -1,0 +1,250 @@
+# Multi-Agent Code Generator
+
+> Describe what you want to build — a pipeline of AI agents plans, writes, reviews, and tests the code for you.
+
+> *v1 foundation — see also [parallel-multi-agent-codegen](https://github.com/tathadn/parallel-multi-agent-codegen) and [self-evolving-codegen](https://github.com/tathadn/self-evolving-codegen) for the DAG and self-evolving follow-ups.*
+
+Built with [LangGraph](https://github.com/langchain-ai/langgraph) and Claude, this tool turns a plain-English description into working, tested code. Five specialized agents collaborate in a graph: one parses your intent, one plans the implementation, one writes the code, one reviews it for quality, and one runs real tests in an isolated Docker sandbox. If tests fail or the review score is too low, the coder revises automatically — up to a configurable number of iterations.
+
+## Demo
+
+![Multi-Agent Code Generator — pipeline complete with 79/79 tests passing](assets/demo.png)
+
+*The sidebar shows real-time agent status indicators. Here, a student grade tracker was generated, reviewed (9/10), and passed 79/79 tests on the first attempt.*
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U([User Request]) --> O[🎯 Orchestrator<br/>Parses request, tracks progress]
+    O --> P[📋 Planner<br/>Structured plan: steps, files, deps]
+    P --> C[💻 Coder<br/>Generates or revises code]
+    C --> R[🔍 Reviewer<br/>Scores 0–10, flags issues]
+    R --> T[🧪 Tester<br/>Generates pytest, runs in Docker sandbox]
+    T -->|all green| F([✅ Final Output<br/>code + plan + review + tests])
+    T -.->|tests fail or review rejected<br/>iteration &lt; max| C
+
+    classDef agent fill:#eef3fb,stroke:#4a6fa5,stroke-width:1px,color:#1a1a1a;
+    classDef endpoint fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px,color:#1a1a1a;
+    class O,P,C,R,T agent;
+    class U,F endpoint;
+```
+
+Each agent shares a single `AgentState` object that flows through the [LangGraph](https://github.com/langchain-ai/langgraph) `StateGraph`. The tester node uses a conditional edge (`should_continue`) to either end the pipeline or loop back to the coder for revision.
+
+---
+
+## Related Projects
+
+This is the **v1 / foundation** in a three-part series on multi-agent code generation:
+
+| Repo | What it adds |
+|---|---|
+| **multi-agent-codegen** (this repo) | Sequential 5-agent pipeline with revision loop, Docker sandbox, LangSmith tracing |
+| [parallel-multi-agent-codegen](https://github.com/tathadn/parallel-multi-agent-codegen) | Orchestrator decomposes tasks into a dependency graph (DAG) and dispatches parallel coder workers for concurrent code generation |
+| [self-evolving-codegen](https://github.com/tathadn/self-evolving-codegen) | Adds a self-evolving tester that autonomously improves its test strategy over generations |
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/tathadn/multi-agent-codegen.git
+cd multi-agent-codegen
+
+# 2. Install dependencies
+pip install -e ".[dev]"
+
+# 3. Set your API key
+cp .env.example .env
+# open .env and set ANTHROPIC_API_KEY=sk-ant-...
+
+# 4. Run the app
+streamlit run app.py
+```
+
+The app opens at `http://localhost:8501`.
+
+---
+
+## How It Works
+
+### Agent Pipeline
+
+| Agent | Model | Role |
+|---|---|---|
+| **Orchestrator** | claude-opus-4-6 | Interprets the user request and sets pipeline status |
+| **Planner** | claude-sonnet-4-6 | Outputs a structured `Plan`: objective, steps, files to create, dependencies, complexity |
+| **Coder** | claude-sonnet-4-6 | Generates `CodeArtifact` objects (filename, language, content). On revisions, receives prior review issues and test failures as context |
+| **Reviewer** | claude-sonnet-4-6 | Scores the code 0–10, marks it approved or not, lists issues and suggestions |
+| **Tester** | user's choice | Generates pytest files and runs them in a Docker sandbox. The model is selected from the sidebar: **Haiku** (fast, best for simple scripts), **Sonnet** (default, reliable for most projects), or **Opus** (most thorough, best for complex logic and edge cases) |
+
+### Revision Loop
+
+After the Tester runs, a `should_continue` router decides what happens next:
+
+- **Review approved + all tests pass** → pipeline ends with `COMPLETED`
+- **Review failed or tests failed + iterations remaining** → loop back to Coder, which receives the reviewer's issues and test errors as additional context
+- **Max iterations reached** → pipeline ends regardless (avoids infinite loops)
+
+Max iterations is configurable in the sidebar (default: 3).
+
+### Shared State
+
+All agents read from and write to a Pydantic `AgentState` model:
+
+```python
+class AgentState(BaseModel):
+    user_request: str
+    plan:         Optional[Plan]
+    artifacts:    list[CodeArtifact]
+    review:       Optional[ReviewFeedback]
+    test_result:  Optional[TestResult]
+    status:       TaskStatus
+    iteration:    int
+    max_iterations: int
+```
+
+---
+
+## Example
+
+**Input prompt:**
+```
+A Python FastAPI server with a /health endpoint and a /echo POST endpoint
+that returns the request body as JSON.
+```
+
+**Generated files:**
+
+`main.py`
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class EchoRequest(BaseModel):
+    message: str
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/echo")
+def echo(body: EchoRequest):
+    return body
+```
+
+`test_main.py`
+```python
+from fastapi.testclient import TestClient
+from main import app
+
+client = TestClient(app)
+
+def test_health():
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+def test_echo():
+    r = client.post("/echo", json={"message": "hello"})
+    assert r.status_code == 200
+    assert r.json() == {"message": "hello"}
+```
+
+**Review:** 9/10 — approved
+**Tests:** 2/2 passed
+**Status:** COMPLETED
+
+---
+
+## Tech Stack
+
+| Library | Version | Purpose |
+|---|---|---|
+| [LangGraph](https://github.com/langchain-ai/langgraph) | ≥ 0.2.0 | Agent orchestration graph with conditional edges |
+| [LangChain Anthropic](https://github.com/langchain-ai/langchain) | ≥ 0.3.0 | Claude API integration via `ChatAnthropic` |
+| [LangChain Core](https://github.com/langchain-ai/langchain) | ≥ 0.3.0 | Message types, structured output |
+| [Pydantic](https://docs.pydantic.dev/) | ≥ 2.0.0 | Typed state schema and structured LLM outputs |
+| [Streamlit](https://streamlit.io/) | ≥ 1.40.0 | Web UI with real-time streaming via `app.stream()` |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | ≥ 1.0.0 | `.env` file loading |
+| [LangSmith](https://smith.langchain.com/) | ≥ 0.1.0 | LLM tracing and observability (optional) |
+
+Python ≥ 3.10 required.
+
+---
+
+## Tracing with LangSmith
+
+Every LLM call across all five agents is automatically traced when LangSmith is enabled. Each pipeline run appears as a single trace in your project dashboard, with a child span per agent showing:
+
+- **Inputs / outputs** — the exact prompt and response for each agent
+- **Token usage** — prompt, completion, and total tokens per call
+- **Latency** — time spent in each agent and end-to-end pipeline duration
+- **Revision loops** — each coder → reviewer → tester iteration is captured as separate spans
+
+**To enable tracing:**
+
+1. Create a free account at [smith.langchain.com](https://smith.langchain.com)
+2. Go to **Settings → API Keys** and generate a new key
+3. Add the following to your `.env` file:
+
+```env
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your_langsmith_api_key_here
+LANGCHAIN_PROJECT=multi-agent-codegen
+```
+
+4. Run the app — traces appear in the `multi-agent-codegen` project automatically.
+
+To disable tracing, set `LANGCHAIN_TRACING_V2=false` or remove the variable.
+
+---
+
+## Running Experiments
+
+This repo ships a small eval harness with a hard budget cap so experiments (prompt-caching A/Bs, reviewer-score threshold sweeps, retry tuning) can't run away and cost real money.
+
+**Budget tracking.** Every `ChatAnthropic` call is wrapped with a `BudgetCallbackHandler` ([utils/budget.py](utils/budget.py)) that tallies input/output tokens, converts them to USD using a static pricing table, and raises `BudgetExceeded` the moment cumulative spend crosses the limit. The Streamlit app surfaces the running total after each generation; the eval harness halts mid-sweep if the cap is hit.
+
+```bash
+# .env
+EXPERIMENT_BUDGET_USD=25
+ENABLE_PROMPT_CACHE=true
+```
+
+**Eval harness.** `scripts/run_evals.py` runs every case in [evals/cases.jsonl](evals/cases.jsonl) through the graph headless and prints a table of pass rate, review score, revision count, latency, and cost.
+
+```bash
+python scripts/run_evals.py                    # run all 10 cases
+python scripts/run_evals.py --cases fizzbuzz   # subset by id
+python scripts/run_evals.py --budget 5         # override budget
+python scripts/run_evals.py --out results.json # dump full results
+```
+
+A case counts as passing only if the reviewer approved it **and** the review score meets `min_review_score` (default 7) **and** all sandbox tests passed — the same gating the live graph applies via `should_continue` in [agents/orchestrator.py](agents/orchestrator.py).
+
+**CI.** [.github/workflows/ci.yml](.github/workflows/ci.yml) runs `ruff` and `mypy` on every push. The eval job is **manual-only** (`workflow_dispatch` with `run_evals=true`) so PRs don't burn tokens — set the `ANTHROPIC_API_KEY` repo secret and pass a budget when dispatching.
+
+---
+
+## Tools Used
+
+- [Claude Code](https://claude.ai/code) — AI coding assistant used during development
+
+---
+
+## Future Work
+
+*For parallel execution and self-evolving agents, see the follow-up repos linked in [Related Projects](#related-projects) above.*
+
+- **Agent memory** — persist previous runs so the coder can learn from past mistakes across sessions
+- **Custom agent prompts** — let users edit agent system prompts from the UI without touching code
+- **Streaming token output** — stream individual tokens from the coder agent for a faster perceived response
+- **Multi-language support** — extend beyond Python to TypeScript, Go, Rust with language-specific test runners
+- **GitHub integration** — push generated code directly to a new branch and open a pull request
