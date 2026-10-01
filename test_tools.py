@@ -1,7 +1,11 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
 import sys
 
-os.environ['OPENROUTER_API_KEY'] = 'YOUR_API_KEY_HERE'
+os.environ['OPENROUTER_API_KEY'] = os.environ.get("OPENROUTER_API_KEY")
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field

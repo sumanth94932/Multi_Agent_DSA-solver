@@ -1,9 +1,13 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import glob
 import re
 
 base_path = r'c:\Users\cc221\Downloads\multi-agent-codegen-main\multi-agent-codegen-main\agents\*.py'
-old_key = 'YOUR_API_KEY_HERE'
-new_key = 'YOUR_API_KEY_HERE'
+old_key = os.environ.get("OPENROUTER_API_KEY")
+new_key = os.environ.get("OPENROUTER_API_KEY")
 
 def replace_in_file(filepath):
     with open(filepath, 'r', encoding='utf-8') as f:

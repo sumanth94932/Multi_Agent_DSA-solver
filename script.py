@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
 import glob
 import re
 
@@ -22,7 +26,7 @@ def replace_in_file(filepath):
     return ChatOpenAI(
         model="openrouter/free",
         base_url="https://openrouter.ai/api/v1",
-        api_key="YOUR_API_KEY_HERE",
+        api_key=os.environ.get("OPENROUTER_API_KEY"),
         temperature=0.2,
         callbacks=[BudgetCallbackHandler()],
     )'''
@@ -33,7 +37,7 @@ def replace_in_file(filepath):
     return ChatOpenAI(
         model="openrouter/free",
         base_url="https://openrouter.ai/api/v1",
-        api_key="YOUR_API_KEY_HERE",
+        api_key=os.environ.get("OPENROUTER_API_KEY"),
         temperature=0.2,
         callbacks=[BudgetCallbackHandler()],
     )'''
